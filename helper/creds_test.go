@@ -20,13 +20,11 @@ func TestLoadCreds_ValidFile(t *testing.T) {
 	credFile := filepath.Join(tmpDir, "test_creds.json")
 
 	validJSON := `{
-		"credential": {
-			"phoneSecret": "test_secret",
-			"bsid": "test_basestation",
-			"phoneId": "test_phone",
-			"phonePassword": "test_phone_pass",
-			"userPassword": "test_user_pass"
-		}
+		"phoneSecret": "test_secret",
+		"bsid": "test_basestation",
+		"phoneId": "test_phone",
+		"phonePassword": "test_phone_pass",
+		"userPassword": "test_user_pass"
 	}`
 
 	err := os.WriteFile(credFile, []byte(validJSON), 0644)
@@ -50,6 +48,31 @@ func TestLoadCreds_ValidFile(t *testing.T) {
 
 	if creds.Credential.Phone != "test_phone" {
 		t.Errorf("LoadCreds() Phone = %q, want %q", creds.Credential.Phone, "test_phone")
+	}
+}
+
+func TestLoadCreds_UTF8BOM(t *testing.T) {
+	tmpDir := t.TempDir()
+	credFile := filepath.Join(tmpDir, "bom_creds.json")
+
+	validJSON := "\xef\xbb\xbf{\n\t\"phoneSecret\": \"test_secret_bom\",\n\t\"bsid\": \"test_basestation_bom\"\n}"
+
+	err := os.WriteFile(credFile, []byte(validJSON), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test credentials file with BOM: %v", err)
+	}
+
+	creds, err := LoadCreds(credFile)
+	if err != nil {
+		t.Fatalf("LoadCreds() with BOM returned error: %v", err)
+	}
+
+	if creds.Credential.PhoneSecret != "test_secret_bom" {
+		t.Errorf("LoadCreds() PhoneSecret = %q, want %q", creds.Credential.PhoneSecret, "test_secret_bom")
+	}
+
+	if creds.Credential.BaseStation != "test_basestation_bom" {
+		t.Errorf("LoadCreds() BaseStation = %q, want %q", creds.Credential.BaseStation, "test_basestation_bom")
 	}
 }
 

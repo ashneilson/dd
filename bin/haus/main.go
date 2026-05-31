@@ -40,6 +40,8 @@ var (
 	flagMqttPrefix      = flag.String("mqttPrefix", "dd-door", "prefix for mqtt")
 	flagRemoveEntity    = flag.String("removeEntity", "", "entity to remove from haus")
 	flagDebug           = flag.Bool("debug", false, "debug mode")
+	flagMetricsPort     = flag.Int("metricsPort", 9090, "port to expose Prometheus metrics (0 to disable)")
+	flagPollInterval    = flag.Duration("pollInterval", 60*time.Second, "polling interval for actual door status (0 to disable)")
 )
 
 func init() {
@@ -57,6 +59,11 @@ func main() {
 	credentials, err := helper.LoadCreds(*flagCredentialsPath)
 	if err != nil {
 		logger.WithField("*flagCredentialsPath", *flagCredentialsPath).WithError(err).Fatal("can't open credentials file")
+	}
+
+	// Optional Prometheus metrics server
+	if *flagMetricsPort > 0 {
+		ddapi.StartMetricsServer(*flagMetricsPort)
 	}
 
 	// MQTT connection setup
@@ -151,6 +158,9 @@ func main() {
 			if err != nil {
 				logger.WithError(err).WithField("deviceID", device.ID).Error("Failed to publish position update")
 			}
+			
+			// Update Prometheus metrics
+			ddapi.UpdateDevicePositionMetric(device.ID, device.Device.Position)
 
 			// Determine the desired FSM state based on position
 			var haState string
@@ -391,6 +401,7 @@ func handleSetPosition(topic string, positionStr string) {
 
 	// Get the appropriate command for this position
 	cmd := ddapi.GetCommandForPosition(position)
+	ddapi.RecordCommand(deviceID, fmt.Sprintf("%d", cmd))
 
 	// Execute the command
 	err = ddapi.SafeCommand(deviceFSM.Conn, deviceID, cmd)
@@ -418,6 +429,28 @@ func handleStatusUpdates(ctx context.Context, conn *dd.Conn, statusCh chan ddapi
 		// Continue even if initial fetch fails - messages loop may recover
 	} else {
 		statusCh <- *status
+	}
+
+	// Periodically poll the actual door status to self-heal state desynchronization
+	if *flagPollInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(*flagPollInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					logger.Debug("Polling door state periodically")
+					status, err := ddapi.SafeFetchStatus(conn)
+					if err != nil {
+						logger.WithError(err).Error("Failed to poll door status")
+					} else {
+						statusCh <- *status
+					}
+				}
+			}
+		}()
 	}
 
 	if err := helper.LoopMessages(ctx, conn, statusCh); err != nil {

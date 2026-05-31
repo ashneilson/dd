@@ -26,6 +26,7 @@ options:
   password: ""
   host: ""
   mqtt_prefix: dd-door
+  poll_interval: 60
   debug: false
 
 schema:
@@ -33,4 +34,5 @@ schema:
   password: password
   host: str
   mqtt_prefix: str
+  poll_interval: int?
   debug: bool

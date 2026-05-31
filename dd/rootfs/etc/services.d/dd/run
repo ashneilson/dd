@@ -10,6 +10,13 @@ DD_HOST="$(bashio::config 'host')"
 MQTT_PREFIX="$(bashio::config 'mqtt_prefix')"
 DEBUG=$(bashio::config 'debug')
 
+if bashio::config.exists 'poll_interval'; then
+    POLL_INTERVAL="$(bashio::config 'poll_interval')"
+else
+    POLL_INTERVAL="60"
+fi
+POLL_INTERVAL_FLAG="-pollInterval ${POLL_INTERVAL}s"
+
 # Check if user provided custom MQTT settings or use HA MQTT service
 if bashio::config.exists 'mqtt.broker'; then
     bashio::log.info "Using custom MQTT broker configuration."
@@ -50,4 +57,5 @@ exec /usr/bin/dd/haus \
     -mqttPassword "${MQTT_PASSWORD}" \
     -mqttPrefix "${MQTT_PREFIX}" \
     -credentials /config/dd-credentials.json \
+    ${POLL_INTERVAL_FLAG} \
     ${DEBUG_FLAG}

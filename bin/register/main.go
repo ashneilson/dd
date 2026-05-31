@@ -1,13 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"log"
-	"os"
 
 	"github.com/gravypower/dd"
 	ddapi "github.com/gravypower/dd/api"
+	"github.com/gravypower/dd/helper"
 )
 
 var (
@@ -24,10 +23,7 @@ func main() {
 		log.Fatalf("must specify -code and -password")
 	}
 
-	f, err := os.Create(*flagCredentialsPath)
-	if err != nil {
-		log.Fatalf("can't create credentials file: %v %v", *flagCredentialsPath, err)
-	}
+
 
 	req := ddapi.RegisterRequest{
 		RemoteRegistrationCode: *flagShareCode,
@@ -38,7 +34,7 @@ func main() {
 	out := ddapi.RegisterResponse{}
 
 	conn := dd.Conn{}
-	err = conn.SimpleRequest(dd.SimpleRequest{
+	err := conn.SimpleRequest(dd.SimpleRequest{
 		Path:   "/app/remoteregister",
 		Target: dd.RemoteTarget,
 		Input:  req,
@@ -50,10 +46,10 @@ func main() {
 
 	out.UserPassword = *flagPassword
 
-	err = json.NewEncoder(f).Encode(out)
+	err = helper.SaveCreds(*flagCredentialsPath, &out)
 	if err != nil {
-		log.Fatalf("can't encode response: %+v %v", out, err)
+		log.Fatalf("can't encode and save response: %+v %v", out, err)
 	}
 
-	log.Printf("Ok! Saved at: %v", *flagCredentialsPath)
+	log.Printf("Ok! Saved encrypted credentials at: %v", *flagCredentialsPath)
 }

@@ -50,6 +50,7 @@ options:
     username: ""
     password: ""
   mqtt_prefix: dd-door
+  poll_interval: 60
 
 schema:
   mqtt:
@@ -58,12 +59,14 @@ schema:
     username: str?      # Optional with '?'
     password: password?  # Optional with '?'
   mqtt_prefix: str
+  poll_interval: int?
 ```
 
 **Benefits:**
 - Supports custom MQTT brokers (not just HA MQTT service)
 - Proper schema validation with optional fields
 - Configurable MQTT prefix for multi-instance setups
+- Configurable status polling interval (`poll_interval` in seconds) for state synchronization/self-healing
 - Follows HA add-on schema best practices
 
 ## Service Script Updates (`dd/rootfs/etc/services.d/dd/run`)
@@ -94,6 +97,24 @@ MQTT_PREFIX="$(bashio::config 'mqtt_prefix')"
 exec /usr/bin/dd/haus \
     ...
     -mqttPrefix "${MQTT_PREFIX}" \
+    ...
+```
+
+### ✅ Added Configurable Polling Interval Support
+
+Added options to retrieve custom polling intervals from Home Assistant add-on configuration and feed it to the `haus` binary to prevent state desynchronization:
+
+```bash
+if bashio::config.exists 'poll_interval'; then
+    POLL_INTERVAL="$(bashio::config 'poll_interval')"
+else
+    POLL_INTERVAL="60"
+fi
+POLL_INTERVAL_FLAG="-pollInterval ${POLL_INTERVAL}s"
+
+exec /usr/bin/dd/haus \
+    ...
+    ${POLL_INTERVAL_FLAG} \
     ...
 ```
 
@@ -249,6 +270,10 @@ After deploying these updates:
    - Verify add-on runs continuously without restarts
    - Check logs for any termination signals or crashes
 
+5. **Self-Healing and FSM Robustness:**
+   - Verify that sending `GO_CLOSE` when cover is closed triggers the door command without causing FSM errors.
+   - Adjust `poll_interval` and verify in the logs that status fetches execute at the designated interval.
+
 ## Summary
 
 All Home Assistant add-on configuration updates completed:
@@ -261,6 +286,6 @@ All Home Assistant add-on configuration updates completed:
 | **Base images** | ✅ Verified | Latest Alpine 3.22 confirmed |
 | **Repository metadata** | ✅ Updated | Proper naming and URLs |
 | **Documentation** | ✅ Complete | Changelog, icon guide, updates summary |
-| **Version bump** | ✅ Complete | 0.2.0 → 0.3.0 for position control |
+| **Version bump** | ✅ Complete | 0.3.0 → 0.3.4 for state self-healing and FSM robustness |
 
-The add-on now follows all current Home Assistant best practices and is ready for the v0.3.0 release!
+The add-on now follows all current Home Assistant best practices and is ready for the v0.3.4 release!
