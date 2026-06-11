@@ -1,8 +1,56 @@
 package dd
 
 import (
+	"sync"
 	"testing"
 )
+
+// TestConn_PendingMessagesConcurrentAccess exercises concurrent draining of
+// pendingMessages (as Conn.Messages does, via takePending) alongside producers that
+// append under genericRequestMutex (as genericRequest/internalMessages do). Run with
+// `go test -race` to catch a regression that drops the locking discipline.
+func TestConn_PendingMessagesConcurrentAccess(t *testing.T) {
+	dc := &Conn{}
+
+	const producers = 4
+	const iterations = 20000
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Producers mimic the append-under-lock done by genericRequest/internalMessages.
+	for i := 0; i < producers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					dc.genericRequestMutex.Lock()
+					dc.pendingMessages = append(dc.pendingMessages, &Message{})
+					dc.genericRequestMutex.Unlock()
+				}
+			}
+		}()
+	}
+
+	// Consumer drains via the same accessor Messages() uses.
+	var drained int
+	for i := 0; i < iterations; i++ {
+		drained += len(dc.takePending())
+	}
+	close(stop)
+	wg.Wait()
+
+	// Drain anything the producers appended after the loop finished.
+	drained += len(dc.takePending())
+
+	if drained == 0 {
+		t.Error("expected to drain at least one pending message across concurrent producers")
+	}
+}
 
 func TestSimpleRequestTarget_Constants(t *testing.T) {
 	// Verify request target constants have expected values

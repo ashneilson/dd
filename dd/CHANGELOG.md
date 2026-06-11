@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - First-time registration now requires a password as well as a share code, failing locally with a clear message instead of attempting to register with an empty password.
 - A device whose ID is already owned by another hub is now refused with a loud error instead of silently driving the wrong hub's connection. Device registration is atomic, so two hubs starting at once cannot overwrite each other. (Assumes SmartDoor device IDs are unique across your hubs; if they collide, the conflicting door is reported and left uncontrolled rather than corrupted.)
 - Fixed a data race on `Conn.pendingMessages` between the status poller and the message loop sharing one connection; reads/clears now use the same lock as the appends.
+- The run script now validates that `hubs` is a non-empty list before starting, and writes the runtime hub file (which may contain share codes/passwords) with `0600` permissions.
 
 ## [0.3.3] - 2025-12-02
 

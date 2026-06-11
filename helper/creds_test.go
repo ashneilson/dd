@@ -3,8 +3,65 @@ package helper
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSanitizeForFilename(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain alphanumeric", "abc123", "abc123"},
+		{"allowed punctuation kept", "ab-cd_EF", "ab-cd_EF"},
+		{"forward slashes replaced", "ab/cd", "ab_cd"},
+		{"backslashes replaced", `ab\cd`, "ab_cd"},
+		{"dots replaced", "..", "__"},
+		{"path traversal replaced", "../../etc", "______etc"},
+		{"spaces replaced", "a b c", "a_b_c"},
+		{"other specials replaced", "bs:id*1", "bs_id_1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeForFilename(tt.input); got != tt.want {
+				t.Errorf("sanitizeForFilename(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCredsPathForBSID_StaysWithinDir(t *testing.T) {
+	dir := t.TempDir()
+
+	cases := []string{
+		"ABC123",
+		"../../evil",
+		"a/b/c",
+		`..\..\evil`,
+		"with space",
+		"..",
+	}
+
+	for _, bsid := range cases {
+		path := CredsPathForBSID(dir, bsid)
+
+		// The credentials file must live directly inside dir; a malicious bsid must not
+		// be able to traverse out of it.
+		if got := filepath.Dir(path); got != filepath.Clean(dir) {
+			t.Errorf("CredsPathForBSID(%q): parent dir = %q, want %q", bsid, got, filepath.Clean(dir))
+		}
+
+		base := filepath.Base(path)
+		if !strings.HasPrefix(base, "dd-credentials-") || !strings.HasSuffix(base, ".json") {
+			t.Errorf("CredsPathForBSID(%q): unexpected filename %q", bsid, base)
+		}
+		if strings.ContainsAny(base, `/\`) {
+			t.Errorf("CredsPathForBSID(%q): filename %q contains a path separator", bsid, base)
+		}
+	}
+}
 
 func TestLoadCreds_FileNotFound(t *testing.T) {
 	_, err := LoadCreds("nonexistent_file.json")
