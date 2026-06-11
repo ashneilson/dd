@@ -101,3 +101,33 @@ func TestFSMTransitions(t *testing.T) {
 		t.Fatalf("expected opening state, got: %s", df.Current())
 	}
 }
+
+func TestCoverStateForPublish(t *testing.T) {
+	tests := []struct {
+		name     string
+		fsmState string
+		position int
+		want     string
+	}{
+		{"fully closed", "closed", 0, "closed"},
+		{"fully open", "open", 100, "open"},
+		{"closed position wins over stale fsm", "opening", 0, "closed"},
+		{"open position wins over stale fsm", "closing", 100, "open"},
+		{"intermediate while opening", "opening", 50, "opening"},
+		{"intermediate while closing", "closing", 30, "closing"},
+		{"intermediate while stopping", "stopping", 40, "stopping"},
+		{"intermediate at rest is open", "open", 20, "open"},
+		{"intermediate when online is open", "online", 20, "open"},
+		{"intermediate when stopped is open", "stopped", 68, "open"},
+		{"position below range is closed", "online", -5, "closed"},
+		{"position above range is open", "online", 150, "open"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CoverStateForPublish(tt.fsmState, tt.position); got != tt.want {
+				t.Errorf("CoverStateForPublish(%q, %d) = %q, want %q", tt.fsmState, tt.position, got, tt.want)
+			}
+		})
+	}
+}

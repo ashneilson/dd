@@ -367,58 +367,41 @@ func processDevice(rt *hubRuntime, mqttHandler *ddapi.MQTTHandler, device ddapi.
 		logger.WithField("deviceID", device.ID).Info("Device already configured")
 	}
 
-	// Always publish position updates from the device
-	if err := mqttHandler.PublishPosition(prefix, device.ID, device.Device.Position); err != nil {
+	position := device.Device.Position
+
+	// Always publish the latest position (retained).
+	if err := mqttHandler.PublishPosition(prefix, device.ID, position); err != nil {
 		logger.WithError(err).WithField("deviceID", device.ID).Error("Failed to publish position update")
 	}
 
 	// Update Prometheus metrics
-	ddapi.UpdateDevicePositionMetric(device.ID, device.Device.Position)
+	ddapi.UpdateDevicePositionMetric(device.ID, position)
 
-	// Determine the desired FSM state based on position
-	var haState string
-	switch device.Device.Position {
-	case OPEN:
-		haState = "go_opened"
-	case CLOSE:
-		haState = "go_closed"
-	default:
-		// Intermediate position - we've already published the position above
-		logger.WithFields(logrus.Fields{
-			"Position": device.Device.Position,
-			"deviceID": device.ID,
-		}).Debug("Device at intermediate position")
-		return // Don't trigger FSM for intermediate positions
-	}
-
+	// Drive FSM transitions when the device has reached a fully open/closed position.
+	// Redundant transitions (already in that state) and invalid ones (the door is moving
+	// the other way) are skipped.
 	currentState := deviceFSM.Current()
-	// Skip redundant transitions to the same final state (idempotent)
-	if (currentState == "closed" && haState == "go_closed") ||
-		(currentState == "open" && haState == "go_opened") {
-		logger.WithFields(logrus.Fields{
-			"currentState": currentState,
-			"haState":      haState,
-			"deviceID":     device.ID,
-		}).Debug("Ignoring redundant transition to the same state")
-		return
+	switch position {
+	case OPEN:
+		if currentState != "open" && currentState != "closing" {
+			if err := deviceFSM.Trigger(context.Background(), "go_opened"); err != nil {
+				logger.WithError(err).WithField("deviceID", device.ID).WithField("currentState", currentState).Error("Failed to process 'go_opened' event")
+			}
+		}
+	case CLOSE:
+		if currentState != "closed" && currentState != "opening" {
+			if err := deviceFSM.Trigger(context.Background(), "go_closed"); err != nil {
+				logger.WithError(err).WithField("deviceID", device.ID).WithField("currentState", currentState).Error("Failed to process 'go_closed' event")
+			}
+		}
 	}
 
-	if (currentState == "opening" && haState == "go_closed") ||
-		(currentState == "closing" && haState == "go_opened") {
-		logger.WithFields(logrus.Fields{
-			"currentState": currentState,
-			"haState":      haState,
-			"deviceID":     device.ID,
-		}).Debug("Ignoring invalid state transition while opening or closing")
-		return
-	}
-
-	// Process the state transition
-	if err := deviceFSM.Trigger(context.Background(), haState); err != nil {
-		logger.WithError(err).
-			WithField("haState", haState).
-			WithField("currentState", deviceFSM.Current()).
-			Error("Failed to process event")
+	// Self-heal: on every poll, (re)publish the current logical state (retained) so Home
+	// Assistant stays in sync even when no FSM transition occurred — e.g. the door was
+	// already at rest, or HA became available after missing the original state message.
+	state := ddapi.CoverStateForPublish(deviceFSM.Current(), position)
+	if err := mqttHandler.PublishStatus(prefix, device.ID, state); err != nil {
+		logger.WithError(err).WithField("deviceID", device.ID).Error("Failed to publish state update")
 	}
 }
 
