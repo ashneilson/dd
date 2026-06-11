@@ -14,9 +14,9 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/gravypower/dd"
-	ddapi "github.com/gravypower/dd/api"
-	"github.com/gravypower/dd/helper"
+	"github.com/ashneilson/dd"
+	ddapi "github.com/ashneilson/dd/api"
+	"github.com/ashneilson/dd/helper"
 	"github.com/sirupsen/logrus"
 )
 

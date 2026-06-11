@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/gravypower/dd"
-	ddapi "github.com/gravypower/dd/api"
+	"github.com/ashneilson/dd"
+	ddapi "github.com/ashneilson/dd/api"
 )
 
 // LoopMessages loops over messages, fetching every few seconds and emitting to the channel.

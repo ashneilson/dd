@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/gravypower/dd"
+	"github.com/ashneilson/dd"
 )
 
 // mockMQTTClient implements a dummy mqtt.Client that reports it is not connected

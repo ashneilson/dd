@@ -22,7 +22,7 @@ A secure and resilient integration that bridges **SmartDoor** smart garage door 
 
 For step-by-step setup and configuration guidance, please see the [Add-on Documentation](DOCS.md).
 
-[addon-store]: https://github.com/gravypower/dd
+[addon-store]: https://github.com/ashneilson/dd
 [aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg
 [amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg
 [armhf-shield]: https://img.shields.io/badge/armhf-yes-green.svg
