@@ -4,7 +4,6 @@ import (
 	"flag"
 	"log"
 
-	"github.com/gravypower/dd"
 	ddapi "github.com/gravypower/dd/api"
 	"github.com/gravypower/dd/helper"
 )
@@ -23,31 +22,12 @@ func main() {
 		log.Fatalf("must specify -code and -password")
 	}
 
-
-
-	req := ddapi.RegisterRequest{
-		RemoteRegistrationCode: *flagShareCode,
-		UserPassword:           *flagPassword,
-		PhoneName:              *flagPhoneInfo,
-		PhoneModel:             *flagPhoneInfo,
-	}
-	out := ddapi.RegisterResponse{}
-
-	conn := dd.Conn{}
-	err := conn.SimpleRequest(dd.SimpleRequest{
-		Path:   "/app/remoteregister",
-		Target: dd.RemoteTarget,
-		Input:  req,
-		Output: &out,
-	})
+	out, err := ddapi.Register(*flagShareCode, *flagPassword, *flagPhoneInfo)
 	if err != nil {
-		log.Fatalf("can't remoteregister: %+v %v", req, err)
+		log.Fatalf("can't remoteregister: %v", err)
 	}
 
-	out.UserPassword = *flagPassword
-
-	err = helper.SaveCreds(*flagCredentialsPath, &out)
-	if err != nil {
+	if err := helper.SaveCreds(*flagCredentialsPath, out); err != nil {
 		log.Fatalf("can't encode and save response: %+v %v", out, err)
 	}
 

@@ -4,6 +4,20 @@ All notable changes to this add-on will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.4.0] - 2026-06-11
+
+### Added
+- **Multiple hub support**: configure any number of SmartDoor hubs/garage doors, each with its own host, share code, account password, and MQTT topic prefix. Configuration is now a repeatable **hubs** list in the add-on UI.
+- Per-hub credentials are stored under `/config` keyed by each hub's stable **base station ID** (`dd-credentials-<bsid>.json`), so changing a hub's name or MQTT prefix no longer triggers re-registration.
+- Automatic per-hub registration on startup: a hub with a share code but no stored credentials registers itself; hubs that already have credentials skip registration.
+
+### Changed
+- Registration moved from the one-time init script into the service, which now manages all hubs from a single process sharing one MQTT connection.
+- The `code`, `password`, `host`, and `mqtt_prefix` top-level options are replaced by per-hub fields inside the new `hubs` list. **Existing single-hub users must move their settings into a single hub entry and will re-register on first start of this version.**
+
+### Fixed
+- Eliminated a latent race where the periodic status poller could send on a closed channel after the message loop ended; hub shutdown is now driven by context cancellation, and one hub losing its connection no longer affects the others.
+
 ## [0.3.3] - 2025-12-02
 
 ### Fixed

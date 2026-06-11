@@ -215,32 +215,47 @@ The `dd` directory contains the Home Assistant add-on configuration:
 
 ### Configuration Options
 
+Configuration is a list of hubs — add one entry per garage door/hub.
+
 **Basic configuration (uses Home Assistant MQTT automatically):**
 ```yaml
-code: "registration_code"      # From SmartDoor app
-password: "registration_password"
-host: "192.168.1.x"            # Local device IP
-mqtt_prefix: "dd-door"         # Optional, customize MQTT topic prefix
+hubs:
+  - name: "Left Garage"           # Friendly name (Home Assistant device name)
+    host: "192.168.1.81"          # Local hub IP
+    code: "registration_code"     # From SmartDoor app (first registration only)
+    password: "registration_password"
+    mqtt_prefix: "dd-door-left"   # Unique MQTT topic prefix per hub
+  - name: "Right Garage"
+    host: "192.168.1.82"
+    code: "registration_code_2"
+    password: "registration_password"
+    mqtt_prefix: "dd-door-right"
+poll_interval: 60
 debug: false
 ```
 
-**Advanced: Custom MQTT broker (optional):**
+**Advanced: Custom MQTT broker (optional):** add an `mqtt` block alongside the `hubs` list:
 ```yaml
-code: "registration_code"
-password: "registration_password"
-host: "192.168.1.x"
-mqtt:                          # Only needed for custom brokers
+hubs:
+  - name: "Left Garage"
+    host: "192.168.1.81"
+    code: "registration_code"
+    password: "registration_password"
+    mqtt_prefix: "dd-door-left"
+mqtt:                             # Only needed for custom brokers
   broker: "192.168.1.50"
   port: 1883
   username: "mqtt_user"
   password: "mqtt_pass"
-mqtt_prefix: "dd-door"
 debug: false
 ```
 
+Each hub registers automatically on first start (if it has a share code but no stored
+credentials). Per-hub credentials are keyed by the hub's stable base station ID.
+
 ## Security Considerations
 
-- Credentials stored in `/config/dd-credentials.json` (plaintext)
+- Credentials stored per hub in `/config/dd-credentials-<bsid>.json`, encrypted at rest (AES-256-GCM)
 - SSL/TLS validation uses embedded SmartDoor CA certificates
 - All device communication encrypted with AES-CBC
 - HMAC-SHA256 signatures prevent request tampering

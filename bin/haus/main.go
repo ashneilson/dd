@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,18 +33,70 @@ var logger = logrus.New()
 
 // Flags
 var (
-	flagCredentialsPath = flag.String("credentials", "dd-credentials.json", "path to credentials file")
-	flagHost            = flag.String("host", "", "host to connect to")
-	flagMqtt            = flag.String("mqtt", "", "mqtt server")
-	flagMqttPort        = flag.Int("mqttPort", 1883, "mqtt port")
-	flagMqttUser        = flag.String("mqttUser", "", "mqtt user")
-	flagMqttPassword    = flag.String("mqttPassword", "", "mqtt password")
-	flagMqttPrefix      = flag.String("mqttPrefix", "dd-door", "prefix for mqtt")
-	flagRemoveEntity    = flag.String("removeEntity", "", "entity to remove from haus")
-	flagDebug           = flag.Bool("debug", false, "debug mode")
-	flagMetricsPort     = flag.Int("metricsPort", 9090, "port to expose Prometheus metrics (0 to disable)")
-	flagPollInterval    = flag.Duration("pollInterval", 60*time.Second, "polling interval for actual door status (0 to disable)")
+	// Multi-hub mode: a JSON file describing one or more hubs.
+	flagHubsPath       = flag.String("hubs", "", "path to JSON file describing one or more hubs ({\"hubs\":[{name,host,code,password,mqtt_prefix}]})")
+	flagCredentialsDir = flag.String("credentialsDir", ".", "directory used to store/load per-hub credentials in multi-hub mode")
+
+	// Legacy single-hub mode (used when -hubs is not provided).
+	flagCredentialsPath = flag.String("credentials", "dd-credentials.json", "path to credentials file (single-hub legacy mode)")
+	flagHost            = flag.String("host", "", "host to connect to (single-hub legacy mode)")
+	flagMqttPrefix      = flag.String("mqttPrefix", "dd-door", "prefix for mqtt (single-hub legacy mode)")
+
+	// Shared settings.
+	flagMqtt         = flag.String("mqtt", "", "mqtt server")
+	flagMqttPort     = flag.Int("mqttPort", 1883, "mqtt port")
+	flagMqttUser     = flag.String("mqttUser", "", "mqtt user")
+	flagMqttPassword = flag.String("mqttPassword", "", "mqtt password")
+	flagRemoveEntity = flag.String("removeEntity", "", "entity to remove from haus")
+	flagDebug        = flag.Bool("debug", false, "debug mode")
+	flagMetricsPort  = flag.Int("metricsPort", 9090, "port to expose Prometheus metrics (0 to disable)")
+	flagPollInterval = flag.Duration("pollInterval", 60*time.Second, "polling interval for actual door status (0 to disable)")
 )
+
+// hubConfig is the user-provided configuration for a single hub.
+type hubConfig struct {
+	Name       string `json:"name"`
+	Host       string `json:"host"`
+	Code       string `json:"code"`
+	Password   string `json:"password"`
+	MQTTPrefix string `json:"mqtt_prefix"`
+
+	// credsPath, when set, points at an explicit credentials file (legacy single-hub
+	// mode). When empty, credentials are loaded/registered under credentialsDir keyed
+	// by the hub's base station ID. Unexported so it is never read from the JSON file.
+	credsPath string
+}
+
+// hubsFile is the on-disk representation passed via -hubs.
+type hubsFile struct {
+	Hubs []hubConfig `json:"hubs"`
+}
+
+// hubRuntime holds the live connection and metadata for a configured hub.
+type hubRuntime struct {
+	cfg       hubConfig
+	conn      *dd.Conn
+	basicInfo ddapi.BasicInfo
+}
+
+// subPrefixes is the set of MQTT prefixes the OnConnect handler (re)subscribes to on
+// every (re)connect. It is populated once all hubs have been initialized.
+var (
+	subPrefixesMu sync.RWMutex
+	subPrefixes   []string
+)
+
+func setSubPrefixes(p []string) {
+	subPrefixesMu.Lock()
+	defer subPrefixesMu.Unlock()
+	subPrefixes = append([]string(nil), p...)
+}
+
+func getSubPrefixes() []string {
+	subPrefixesMu.RLock()
+	defer subPrefixesMu.RUnlock()
+	return append([]string(nil), subPrefixes...)
+}
 
 func init() {
 	logger.SetOutput(os.Stdout)
@@ -56,9 +110,13 @@ func init() {
 func main() {
 	flag.Parse()
 
-	credentials, err := helper.LoadCreds(*flagCredentialsPath)
+	if *flagDebug {
+		logger.SetLevel(logrus.DebugLevel)
+	}
+
+	hubs, err := loadHubConfigs()
 	if err != nil {
-		logger.WithField("*flagCredentialsPath", *flagCredentialsPath).WithError(err).Fatal("can't open credentials file")
+		logger.WithError(err).Fatal("failed to load hub configuration")
 	}
 
 	// Optional Prometheus metrics server
@@ -66,7 +124,7 @@ func main() {
 		ddapi.StartMetricsServer(*flagMetricsPort)
 	}
 
-	// MQTT connection setup
+	// MQTT connection setup (a single client shared by every hub)
 	mqttClient := connectToMQTT(*flagMqtt, *flagMqttUser, *flagMqttPassword, *flagMqttPort)
 	mqttHandler := ddapi.NewMQTTHandler(mqttClient, logger)
 
@@ -84,24 +142,34 @@ func main() {
 	logger.Info("MQTT is connected; proceeding with initialization")
 
 	if *flagRemoveEntity != "" {
-		err := mqttHandler.RemoveEntity(*flagRemoveEntity)
-		if err != nil {
+		if err := mqttHandler.RemoveEntity(*flagRemoveEntity); err != nil {
 			logger.WithField("*flagRemoveEntity", *flagRemoveEntity).WithError(err).Fatal("can't remove entity")
 		}
 		return
 	}
 
-	ddConn := dd.Conn{Host: *flagHost, Debug: *flagDebug}
-	err = ddConn.Connect(credentials.Credential)
-	if err != nil {
-		logger.WithError(err).Fatal("failed to connect to dd")
+	// Set up each hub: ensure credentials, connect, and fetch basic info. A failure for
+	// one hub is logged and skipped so a single unreachable hub does not take down the
+	// others.
+	var runtimes []*hubRuntime
+	var prefixes []string
+	for _, hc := range hubs {
+		rt, err := setupHub(hc)
+		if err != nil {
+			logger.WithError(err).WithFields(logrus.Fields{"hub": hc.Name, "host": hc.Host}).Error("failed to set up hub; skipping")
+			continue
+		}
+		runtimes = append(runtimes, rt)
+		prefixes = append(prefixes, rt.cfg.MQTTPrefix)
 	}
 
-	basicInfo, err := ddapi.FetchBasicInfo(&ddConn)
-	if err != nil {
-		logger.WithError(err).Fatal("failed to fetch basic device info")
+	if len(runtimes) == 0 {
+		logger.Fatal("no hubs could be initialized; exiting")
 	}
-	logger.WithField("basicInfo", basicInfo).Debug("Fetched basic information about the connection")
+
+	// Publish prefixes so reconnects resubscribe to every hub, then subscribe now.
+	setSubPrefixes(prefixes)
+	subscribeToMQTTCommandTopics(mqttHandler, prefixes)
 
 	// Context for background goroutines
 	ctx, cancel := context.WithCancel(context.Background())
@@ -113,16 +181,14 @@ func main() {
 	go func() {
 		<-stopCh
 		logger.Info("Termination signal received")
-		// Ensure resources are cleaned up
 		logger.Info("Shutting down gracefully")
-		// Cancel the background status loop first
+		// Cancel the background status loops first
 		cancel()
-		// Use thread-safe helper to get all devices
+		// Use thread-safe helper to get all devices across all hubs
 		allDevices := ddapi.GetAllDeviceFSMs()
 		for deviceID, fsm := range allDevices {
 			logger.Infof("Shutting down device: %s", deviceID)
-			err := fsm.Trigger(context.Background(), "go_offline")
-			if err != nil {
+			if err := fsm.Trigger(context.Background(), "go_offline"); err != nil {
 				logger.WithField("deviceID", deviceID).WithError(err).Error("Failed to set device to offline")
 			} else {
 				logger.WithField("deviceID", deviceID).Info("Device successfully set to offline")
@@ -132,85 +198,207 @@ func main() {
 		os.Exit(0)
 	}()
 
+	// Run one independent status loop per hub.
+	var wg sync.WaitGroup
+	for _, rt := range runtimes {
+		wg.Add(1)
+		go func(rt *hubRuntime) {
+			defer wg.Done()
+			runHub(ctx, rt, mqttHandler)
+		}(rt)
+	}
+	wg.Wait()
+}
+
+// loadHubConfigs returns the list of hubs to manage. In multi-hub mode it reads the
+// JSON file given by -hubs; otherwise it builds a single hub from the legacy flags.
+func loadHubConfigs() ([]hubConfig, error) {
+	if *flagHubsPath != "" {
+		data, err := os.ReadFile(*flagHubsPath)
+		if err != nil {
+			return nil, fmt.Errorf("read hubs file %s: %w", *flagHubsPath, err)
+		}
+		var hf hubsFile
+		if err := json.Unmarshal(data, &hf); err != nil {
+			return nil, fmt.Errorf("parse hubs file %s: %w", *flagHubsPath, err)
+		}
+		if len(hf.Hubs) == 0 {
+			return nil, fmt.Errorf("no hubs defined in %s", *flagHubsPath)
+		}
+
+		seenPrefix := map[string]bool{}
+		for i := range hf.Hubs {
+			h := &hf.Hubs[i]
+			if h.Host == "" {
+				return nil, fmt.Errorf("hub %q is missing host", h.Name)
+			}
+			if h.MQTTPrefix == "" {
+				return nil, fmt.Errorf("hub %q (%s) is missing mqtt_prefix", h.Name, h.Host)
+			}
+			if seenPrefix[h.MQTTPrefix] {
+				return nil, fmt.Errorf("duplicate mqtt_prefix %q; each hub must use a unique prefix", h.MQTTPrefix)
+			}
+			seenPrefix[h.MQTTPrefix] = true
+		}
+		return hf.Hubs, nil
+	}
+
+	// Legacy single-hub mode driven by individual flags.
+	if *flagHost == "" {
+		return nil, fmt.Errorf("no -hubs file and no -host provided")
+	}
+	return []hubConfig{{
+		Host:       *flagHost,
+		MQTTPrefix: *flagMqttPrefix,
+		credsPath:  *flagCredentialsPath,
+	}}, nil
+}
+
+// setupHub ensures credentials exist for the hub, opens a connection, and fetches the
+// device's basic info.
+func setupHub(hc hubConfig) (*hubRuntime, error) {
+	var creds *ddapi.RegisterResponse
+
+	if hc.credsPath != "" {
+		// Legacy mode: load the pre-existing credentials file directly.
+		c, err := helper.LoadCreds(hc.credsPath)
+		if err != nil {
+			return nil, fmt.Errorf("load credentials %s: %w", hc.credsPath, err)
+		}
+		creds = c
+	} else {
+		c, path, err := helper.EnsureHubCredentials(*flagCredentialsDir, hc.Host, hc.Code, hc.Password)
+		if err != nil {
+			return nil, err
+		}
+		logger.WithFields(logrus.Fields{"hub": hc.Name, "host": hc.Host, "credentials": path}).Info("Hub credentials ready")
+		creds = c
+	}
+
+	conn := &dd.Conn{Host: hc.Host, Debug: *flagDebug}
+	if err := conn.Connect(creds.Credential); err != nil {
+		return nil, fmt.Errorf("connect to %s: %w", hc.Host, err)
+	}
+
+	basicInfo, err := ddapi.FetchBasicInfo(conn)
+	if err != nil {
+		return nil, fmt.Errorf("fetch basic device info from %s: %w", hc.Host, err)
+	}
+
+	// Prefer the user-supplied hub name for the Home Assistant device registry entry.
+	if hc.Name != "" {
+		basicInfo.Name = hc.Name
+	}
+
+	logger.WithFields(logrus.Fields{
+		"hub":  hc.Name,
+		"host": hc.Host,
+		"bsid": basicInfo.BaseStation,
+	}).Info("Connected to hub")
+
+	return &hubRuntime{cfg: hc, conn: conn, basicInfo: *basicInfo}, nil
+}
+
+// runHub drives the status loop for a single hub until its context is cancelled or the
+// underlying connection fails. Each hub gets its own cancellable context derived from
+// the parent so that one hub losing its connection does not affect the others.
+func runHub(parentCtx context.Context, rt *hubRuntime, mqttHandler *ddapi.MQTTHandler) {
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+
 	statusCh := make(chan ddapi.DoorStatus)
-	go handleStatusUpdates(ctx, &ddConn, statusCh)
+	go handleStatusUpdates(ctx, cancel, rt.conn, statusCh)
 
-	for status := range statusCh {
-		for _, device := range status.Devices {
-			logger.WithField("Position", device.Device.Position).Info("Announcing Position")
-
-			// Ensure thread-safe access to DeviceFSMs using helper functions
-			deviceFSM, exists := ddapi.GetDeviceFSM(device.ID)
-			if !exists {
-				deviceFSM = ddapi.ConfigureDevice(mqttHandler, &ddConn, *flagMqttPrefix, device, *basicInfo)
-				// Subscriptions are handled in MQTT OnConnect handler
-				logger.Info("Waiting on status updates...")
-				err := deviceFSM.Trigger(context.Background(), "go_online")
-				if err != nil {
-					logger.WithError(err).Error("Failed to process 'go_online' event")
-				}
-			} else {
-				logger.WithField("deviceID", device.ID).Info("Device already configured")
-			}
-
-			// Always publish position updates from the device
-			err := mqttHandler.PublishPosition(*flagMqttPrefix, device.ID, device.Device.Position)
-			if err != nil {
-				logger.WithError(err).WithField("deviceID", device.ID).Error("Failed to publish position update")
-			}
-			
-			// Update Prometheus metrics
-			ddapi.UpdateDevicePositionMetric(device.ID, device.Device.Position)
-
-			// Determine the desired FSM state based on position
-			var haState string
-			switch device.Device.Position {
-			case OPEN:
-				haState = "go_opened"
-			case CLOSE:
-				haState = "go_closed"
-			default:
-				// Intermediate position - we've already published the position above
-				logger.WithFields(logrus.Fields{
-					"Position": device.Device.Position,
-					"deviceID": device.ID,
-				}).Debug("Device at intermediate position")
-				continue // Don't trigger FSM for intermediate positions
-			}
-
-			currentState := deviceFSM.Current()
-			// Skip redundant transitions to the same final state (idempotent)
-			if (currentState == "closed" && haState == "go_closed") ||
-				(currentState == "open" && haState == "go_opened") {
-				logger.WithFields(logrus.Fields{
-					"currentState": currentState,
-					"haState":      haState,
-					"deviceID":     device.ID,
-				}).Debug("Ignoring redundant transition to the same state")
-				continue
-			}
-
-			if (currentState == "opening" && haState == "go_closed") ||
-				(currentState == "closing" && haState == "go_opened") {
-				logger.WithFields(logrus.Fields{
-					"currentState": currentState,
-					"haState":      haState,
-					"deviceID":     device.ID,
-				}).Debug("Ignoring invalid state transition while opening or closing")
-				continue
-			}
-
-			// Process the state transition
-			err = deviceFSM.Trigger(context.Background(), haState)
-			if err != nil {
-				logger.WithError(err).
-					WithField("haState", haState).
-					WithField("currentState", deviceFSM.Current()).
-					Error("Failed to process event")
+	for {
+		select {
+		case <-ctx.Done():
+			logger.WithField("hub", rt.cfg.Name).Warn("Hub status loop ended")
+			return
+		case status := <-statusCh:
+			for _, device := range status.Devices {
+				processDevice(rt, mqttHandler, device)
 			}
 		}
 	}
+}
 
+// processDevice configures (if needed) and updates the FSM/MQTT state for a single
+// device belonging to the given hub.
+func processDevice(rt *hubRuntime, mqttHandler *ddapi.MQTTHandler, device ddapi.DoorStatusDevice) {
+	prefix := rt.cfg.MQTTPrefix
+
+	logger.WithFields(logrus.Fields{
+		"Position": device.Device.Position,
+		"hub":      rt.cfg.Name,
+		"deviceID": device.ID,
+	}).Info("Announcing Position")
+
+	// Ensure thread-safe access to DeviceFSMs using helper functions
+	deviceFSM, exists := ddapi.GetDeviceFSM(device.ID)
+	if !exists {
+		deviceFSM = ddapi.ConfigureDevice(mqttHandler, rt.conn, prefix, device, rt.basicInfo)
+		// Subscriptions are handled in the MQTT OnConnect handler
+		logger.Info("Waiting on status updates...")
+		if err := deviceFSM.Trigger(context.Background(), "go_online"); err != nil {
+			logger.WithError(err).Error("Failed to process 'go_online' event")
+		}
+	} else {
+		logger.WithField("deviceID", device.ID).Info("Device already configured")
+	}
+
+	// Always publish position updates from the device
+	if err := mqttHandler.PublishPosition(prefix, device.ID, device.Device.Position); err != nil {
+		logger.WithError(err).WithField("deviceID", device.ID).Error("Failed to publish position update")
+	}
+
+	// Update Prometheus metrics
+	ddapi.UpdateDevicePositionMetric(device.ID, device.Device.Position)
+
+	// Determine the desired FSM state based on position
+	var haState string
+	switch device.Device.Position {
+	case OPEN:
+		haState = "go_opened"
+	case CLOSE:
+		haState = "go_closed"
+	default:
+		// Intermediate position - we've already published the position above
+		logger.WithFields(logrus.Fields{
+			"Position": device.Device.Position,
+			"deviceID": device.ID,
+		}).Debug("Device at intermediate position")
+		return // Don't trigger FSM for intermediate positions
+	}
+
+	currentState := deviceFSM.Current()
+	// Skip redundant transitions to the same final state (idempotent)
+	if (currentState == "closed" && haState == "go_closed") ||
+		(currentState == "open" && haState == "go_opened") {
+		logger.WithFields(logrus.Fields{
+			"currentState": currentState,
+			"haState":      haState,
+			"deviceID":     device.ID,
+		}).Debug("Ignoring redundant transition to the same state")
+		return
+	}
+
+	if (currentState == "opening" && haState == "go_closed") ||
+		(currentState == "closing" && haState == "go_opened") {
+		logger.WithFields(logrus.Fields{
+			"currentState": currentState,
+			"haState":      haState,
+			"deviceID":     device.ID,
+		}).Debug("Ignoring invalid state transition while opening or closing")
+		return
+	}
+
+	// Process the state transition
+	if err := deviceFSM.Trigger(context.Background(), haState); err != nil {
+		logger.WithError(err).
+			WithField("haState", haState).
+			WithField("currentState", deviceFSM.Current()).
+			Error("Failed to process event")
+	}
 }
 
 // Connect to MQTT broker
@@ -233,8 +421,8 @@ func connectToMQTT(broker, user, password string, port int) mqtt.Client {
 	opts.SetResumeSubs(true)
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
 		logger.Info("Connected to MQTT broker")
-		// Subscribe (or resubscribe) on every (re)connect
-		subscribeToMQTTCommandTopics(ddapi.NewMQTTHandler(c, logger), *flagMqttPrefix)
+		// Subscribe (or resubscribe) to every configured hub on each (re)connect
+		subscribeToMQTTCommandTopics(ddapi.NewMQTTHandler(c, logger), getSubPrefixes())
 	})
 	opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
 		logger.WithError(err).Warn("MQTT connection lost; will retry")
@@ -264,16 +452,23 @@ func connectToMQTT(broker, user, password string, port int) mqtt.Client {
 	return client
 }
 
-// Subscribe to MQTT topics
-func subscribeToMQTTCommandTopics(mqttHandler *ddapi.MQTTHandler, prefix string) {
-	commandTopics := fmt.Sprintf(ddapi.CommandTopicTemplate, prefix, "+")
-	setPositionTopics := fmt.Sprintf(ddapi.SetPositionTopicTemplate, prefix, "+")
-
+// subscribeToMQTTCommandTopics subscribes to the command/set_position topics for every
+// configured hub prefix.
+func subscribeToMQTTCommandTopics(mqttHandler *ddapi.MQTTHandler, prefixes []string) {
 	// If not connected, skip subscribing; OnConnect will invoke us again
 	if !mqttHandler.Client.IsConnected() {
-		logger.WithField("topic", commandTopics).Warn("Skipping subscribe: MQTT not connected")
+		logger.Warn("Skipping subscribe: MQTT not connected")
 		return
 	}
+	for _, prefix := range prefixes {
+		subscribeForPrefix(mqttHandler, prefix)
+	}
+}
+
+// subscribeForPrefix subscribes to the command and set_position topics for one prefix.
+func subscribeForPrefix(mqttHandler *ddapi.MQTTHandler, prefix string) {
+	commandTopics := fmt.Sprintf(ddapi.CommandTopicTemplate, prefix, "+")
+	setPositionTopics := fmt.Sprintf(ddapi.SetPositionTopicTemplate, prefix, "+")
 
 	// Subscribe to command topic
 	token := mqttHandler.Client.Subscribe(commandTopics, 0, func(client mqtt.Client, msg mqtt.Message) {
@@ -308,7 +503,8 @@ func subscribeToMQTTCommandTopics(mqttHandler *ddapi.MQTTHandler, prefix string)
 	logger.WithField("setPositionTopics", setPositionTopics).Info("Subscribed to set_position topic")
 }
 
-// Handle incoming MQTT messages
+// Handle incoming MQTT messages. The device FSM (looked up by device ID) carries its own
+// connection, so commands are routed to the correct hub regardless of the topic prefix.
 func handleCommand(topic string, command string) {
 	parts := strings.Split(topic, "/")
 	if len(parts) < 3 {
@@ -327,28 +523,23 @@ func handleCommand(topic string, command string) {
 
 	switch command {
 	case "ONLINE":
-		err := deviceFSM.Trigger(context.Background(), "go_online")
-		if err != nil {
+		if err := deviceFSM.Trigger(context.Background(), "go_online"); err != nil {
 			logger.WithError(err).Error("Failed to process 'go_online' event")
 		}
 	case "OFFLINE":
-		err := deviceFSM.Trigger(context.Background(), "go_offline")
-		if err != nil {
+		if err := deviceFSM.Trigger(context.Background(), "go_offline"); err != nil {
 			logger.WithError(err).Error("Failed to process 'go_offline' event")
 		}
 	case "GO_OPEN":
-		err := deviceFSM.Trigger(context.Background(), "go_open")
-		if err != nil {
+		if err := deviceFSM.Trigger(context.Background(), "go_open"); err != nil {
 			logger.WithError(err).Error("Failed to process 'open' event")
 		}
 	case "GO_CLOSE":
-		err := deviceFSM.Trigger(context.Background(), "go_close")
-		if err != nil {
+		if err := deviceFSM.Trigger(context.Background(), "go_close"); err != nil {
 			logger.WithError(err).Error("Failed to process 'close' event")
 		}
 	case "STOP":
-		err := deviceFSM.Trigger(context.Background(), "go_stop")
-		if err != nil {
+		if err := deviceFSM.Trigger(context.Background(), "go_stop"); err != nil {
 			logger.WithError(err).Error("Failed to process 'stop' event")
 		}
 	default:
@@ -403,9 +594,8 @@ func handleSetPosition(topic string, positionStr string) {
 	cmd := ddapi.GetCommandForPosition(position)
 	ddapi.RecordCommand(deviceID, fmt.Sprintf("%d", cmd))
 
-	// Execute the command
-	err = ddapi.SafeCommand(deviceFSM.Conn, deviceID, cmd)
-	if err != nil {
+	// Execute the command against this device's own hub connection
+	if err := ddapi.SafeCommand(deviceFSM.Conn, deviceID, cmd); err != nil {
 		logger.WithFields(logrus.Fields{
 			"deviceID": deviceID,
 			"position": position,
@@ -422,13 +612,24 @@ func handleSetPosition(topic string, positionStr string) {
 	}).Info("Position command executed successfully")
 }
 
-func handleStatusUpdates(ctx context.Context, conn *dd.Conn, statusCh chan ddapi.DoorStatus) {
-	status, err := ddapi.SafeFetchStatus(conn)
-	if err != nil {
+func handleStatusUpdates(ctx context.Context, cancel context.CancelFunc, conn *dd.Conn, statusCh chan ddapi.DoorStatus) {
+	// send delivers a status update unless the context is cancelled first. We never
+	// close statusCh, so concurrent senders (initial fetch, poller, message loop) can
+	// never panic on a closed channel; runHub observes shutdown via ctx instead.
+	send := func(s ddapi.DoorStatus) bool {
+		select {
+		case statusCh <- s:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	if status, err := ddapi.SafeFetchStatus(conn); err != nil {
 		logger.WithError(err).Error("Failed to fetch initial status")
 		// Continue even if initial fetch fails - messages loop may recover
-	} else {
-		statusCh <- *status
+	} else if !send(*status) {
+		return
 	}
 
 	// Periodically poll the actual door status to self-heal state desynchronization
@@ -445,8 +646,10 @@ func handleStatusUpdates(ctx context.Context, conn *dd.Conn, statusCh chan ddapi
 					status, err := ddapi.SafeFetchStatus(conn)
 					if err != nil {
 						logger.WithError(err).Error("Failed to poll door status")
-					} else {
-						statusCh <- *status
+						continue
+					}
+					if !send(*status) {
+						return
 					}
 				}
 			}
@@ -455,7 +658,7 @@ func handleStatusUpdates(ctx context.Context, conn *dd.Conn, statusCh chan ddapi
 
 	if err := helper.LoopMessages(ctx, conn, statusCh); err != nil {
 		logger.WithError(err).Error("Error reading messages - connection may be lost")
-		// Allow graceful shutdown instead of Fatal
-		close(statusCh)
 	}
+	// Stop this hub's loops; runHub observes the cancellation and returns.
+	cancel()
 }

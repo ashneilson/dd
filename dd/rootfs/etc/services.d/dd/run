@@ -5,9 +5,7 @@
 # ==============================================================================
 bashio::log.info "Starting dd..."
 
-# Retrieve config/service values
-DD_HOST="$(bashio::config 'host')"
-MQTT_PREFIX="$(bashio::config 'mqtt_prefix')"
+# Retrieve global config/service values
 DEBUG=$(bashio::config 'debug')
 
 if bashio::config.exists 'poll_interval'; then
@@ -16,6 +14,19 @@ else
     POLL_INTERVAL="60"
 fi
 POLL_INTERVAL_FLAG="-pollInterval ${POLL_INTERVAL}s"
+
+# Build the hub configuration file consumed by the haus binary. The 'hubs' option is a
+# list of objects whose keys (name, host, code, password, mqtt_prefix) match the JSON the
+# haus binary expects, so we can pass it through with minimal reshaping.
+HUBS_FILE="/tmp/dd-hubs.json"
+HUBS_JSON="$(bashio::config 'hubs')"
+if [ -z "${HUBS_JSON}" ] || [ "${HUBS_JSON}" = "null" ]; then
+    bashio::log.fatal "No hubs configured. Add at least one hub (host, mqtt_prefix and, for first-time registration, a share code) in the add-on configuration."
+    exit 1
+fi
+echo "${HUBS_JSON}" | jq '{hubs: .}' > "${HUBS_FILE}"
+HUB_COUNT="$(echo "${HUBS_JSON}" | jq 'length')"
+bashio::log.info "Configured ${HUB_COUNT} hub(s)."
 
 # Check if user provided custom MQTT settings or use HA MQTT service
 if bashio::config.exists 'mqtt.broker'; then
@@ -48,14 +59,15 @@ else
     DEBUG_FLAG=""
 fi
 
-# Run your dd/haus command, appending the debug flag if set
+# Run the dd/haus command in multi-hub mode. Per-hub credentials are stored under /config
+# keyed by each hub's base station ID, and registration happens automatically on first run
+# for any hub that has a share code but no stored credentials yet.
 exec /usr/bin/dd/haus \
-    -host "${DD_HOST}" \
+    -hubs "${HUBS_FILE}" \
+    -credentialsDir /config \
     -mqtt "${MQTT_HOST}" \
     -mqttPort "${MQTT_PORT}" \
     -mqttUser "${MQTT_USER}" \
     -mqttPassword "${MQTT_PASSWORD}" \
-    -mqttPrefix "${MQTT_PREFIX}" \
-    -credentials /config/dd-credentials.json \
     ${POLL_INTERVAL_FLAG} \
     ${DEBUG_FLAG}
