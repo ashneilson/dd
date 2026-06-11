@@ -10,9 +10,10 @@ A secure and resilient integration that bridges **SmartDoor** smart garage door 
 
 ## Features
 
-- **MQTT Discovery**: Automatic entity registration under Home Assistant (Cover entity).
+- **Multiple Hub Support**: Manage several SmartDoor garage doors/hubs from one add-on, each with its own host, share code, and MQTT topic prefix.
+- **MQTT Discovery**: Automatic entity registration under Home Assistant (Cover entity) for every door across all hubs.
 - **Position Control**: Full support for opening/closing to precise percentages (5% - 95%) or standard Open/Close/Stop commands.
-- **At-Rest Encrypted Credentials**: Auto-migrates and encrypts your login credentials locally under `/config/dd-credentials.json` via AES-256-GCM.
+- **At-Rest Encrypted Credentials**: Encrypts each hub's login credentials locally under `/config/dd-credentials-<bsid>.json` via AES-256-GCM.
 - **Metrics Integration**: Built-in optional Prometheus metrics endpoint.
 - **Robust FSM & Reconnection**: Handles network dropouts gracefully and recovers without crashing.
 - **AppArmor Protection**: Strict kernel-level security isolation profile enforced by default.

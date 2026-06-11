@@ -1,19 +1,10 @@
 configuration:
-  code:
-    name: "Registration Share Code"
-    description: "The one-time registration share code generated from your SmartDoor mobile application."
-  password:
-    name: "User Password"
-    description: "The password associated with your SmartDoor user account."
-  host:
-    name: "SmartDoor Device IP/Host"
-    description: "The local IP address or host name of your SmartDoor garage door device."
-  mqtt_prefix:
-    name: "MQTT Topic Prefix"
-    description: "The prefix topic used for MQTT messages (defaults to 'dd-door')."
+  hubs:
+    name: "SmartDoor Hubs"
+    description: "One entry per SmartDoor hub/garage door. Each hub needs its own host (local IP), a unique MQTT topic prefix, and — for the very first registration only — its own share code and your account password. Click 'Add another' to configure additional hubs."
   poll_interval:
     name: "Status Poll Interval (seconds)"
-    description: "How often to poll the SmartDoor device for actual door status updates (default: 60s)."
+    description: "How often to poll each SmartDoor hub for actual door status updates (default: 60s)."
   debug:
     name: "Enable Debug Logging"
     description: "Set to true to print detailed verbose debug logs to the addon output console."

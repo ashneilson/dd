@@ -61,6 +61,20 @@ func SetDeviceFSM(deviceID string, fsm *DeviceFSM) {
 	DeviceFSMs[deviceID] = fsm
 }
 
+// ClaimDeviceFSM atomically registers fsm as the owner of deviceID if no FSM exists yet.
+// If one already exists it makes no change and returns the existing FSM with claimed=false.
+// This lets callers detect a device ID that is already owned (e.g. by another hub) without
+// racing two hubs into overwriting each other during concurrent startup.
+func ClaimDeviceFSM(deviceID string, fsm *DeviceFSM) (owner *DeviceFSM, claimed bool) {
+	deviceFSMsMutex.Lock()
+	defer deviceFSMsMutex.Unlock()
+	if existing, ok := DeviceFSMs[deviceID]; ok {
+		return existing, false
+	}
+	DeviceFSMs[deviceID] = fsm
+	return fsm, true
+}
+
 // GetAllDeviceFSMs safely returns all device FSMs (used for shutdown)
 func GetAllDeviceFSMs() map[string]*DeviceFSM {
 	deviceFSMsMutex.RLock()
@@ -83,6 +97,7 @@ type MQTTHandler struct {
 // DeviceFSM encapsulates a state machine for a device
 type DeviceFSM struct {
 	ID          string
+	HubID       string // base station ID (bsid) of the hub that owns this device
 	MQTTPrefix  string
 	FSM         *fsm.FSM
 	Conn        *dd.Conn
@@ -189,8 +204,29 @@ func (h *MQTTHandler) RemoveEntity(deviceID string) error {
 	return nil
 }
 
-// ConfigureDevice publishes the Home Assistant MQTT cover configuration
+// ConfigureDevice publishes the Home Assistant MQTT cover configuration and registers the
+// device's FSM. It returns nil if the device ID is already owned by a different hub (a
+// collision we refuse to handle rather than silently overwriting the other hub's device).
 func ConfigureDevice(handler *MQTTHandler, conn *dd.Conn, mqttPrefix string, device DoorStatusDevice, basicInfo BasicInfo) *DeviceFSM {
+	// Build the FSM and atomically claim ownership of this device ID before doing any
+	// MQTT work, so two hubs starting concurrently can't both configure the same ID.
+	deviceFSM := NewDeviceFSM(device.ID, mqttPrefix, conn, handler)
+	deviceFSM.HubID = basicInfo.BaseStation
+
+	owner, claimed := ClaimDeviceFSM(device.ID, deviceFSM)
+	if !claimed {
+		if owner.HubID == basicInfo.BaseStation {
+			// Same hub already configured this device; reuse the existing FSM.
+			return owner
+		}
+		logger.WithFields(logrus.Fields{
+			"deviceID": device.ID,
+			"thisHub":  basicInfo.BaseStation,
+			"ownerHub": owner.HubID,
+		}).Error("Device ID is already owned by another hub; refusing to configure it. SmartDoor device IDs appear to collide across your hubs — this device will not be controllable until device identities are made hub-unique.")
+		return nil
+	}
+
 	configTopic := fmt.Sprintf(HomeAssistantConfigTopicTemplate, device.ID)
 	configPayload := map[string]interface{}{
 		"name":                  device.Name,
@@ -247,8 +283,6 @@ func ConfigureDevice(handler *MQTTHandler, conn *dd.Conn, mqttPrefix string, dev
 		}()
 	}
 
-	deviceFSM := NewDeviceFSM(device.ID, mqttPrefix, conn, handler)
-	SetDeviceFSM(device.ID, deviceFSM)
 	return deviceFSM
 }
 

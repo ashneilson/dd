@@ -8,9 +8,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/gravypower/dd"
 	ddapi "github.com/gravypower/dd/api"
 	"github.com/sirupsen/logrus"
 )
@@ -114,4 +118,83 @@ func LoadCreds(p string) (*ddapi.RegisterResponse, error) {
 
 	err = json.Unmarshal(plaintext, &creds)
 	return &creds, err
+}
+
+// sanitizeForFilename replaces any characters that are not safe in a filename with '_'.
+func sanitizeForFilename(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+}
+
+// CredsPathForBSID returns the on-disk credentials path for a hub identified by its
+// base station ID. The bsid is stable hardware identity, so the credentials file name
+// does not change even if the user later edits the MQTT prefix or hub name.
+func CredsPathForBSID(dir, bsid string) string {
+	return filepath.Join(dir, fmt.Sprintf("dd-credentials-%s.json", sanitizeForFilename(bsid)))
+}
+
+// EnsureHubCredentials loads existing credentials for the hub reachable at host, or
+// registers new ones using the share code/password if none exist yet.
+//
+// The hub's stable base station ID (bsid) is fetched directly from the hardware (an
+// unauthenticated SDK call that only needs the host) and used as the credentials file
+// key. This keeps each hub's credentials stable across configuration changes and lets
+// us decide whether registration is required before consuming the one-time share code.
+func EnsureHubCredentials(dir, host, shareCode, password string) (*ddapi.RegisterResponse, string, error) {
+	infoConn := &dd.Conn{Host: host}
+	info, err := ddapi.FetchBasicInfo(infoConn)
+	if err != nil {
+		return nil, "", fmt.Errorf("could not reach hub at %s to determine its ID: %w", host, err)
+	}
+	if info.BaseStation == "" {
+		return nil, "", fmt.Errorf("hub at %s did not report a base station ID", host)
+	}
+
+	path := CredsPathForBSID(dir, info.BaseStation)
+
+	switch _, statErr := os.Stat(path); {
+	case statErr == nil:
+		// Credentials already exist for this hub; load and reuse them.
+		creds, err := LoadCreds(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("load existing credentials %s: %w", path, err)
+		}
+		return creds, path, nil
+	case !os.IsNotExist(statErr):
+		return nil, "", fmt.Errorf("stat credentials %s: %w", path, statErr)
+	}
+
+	// No credentials yet: a share code and password are required to register this hub.
+	if shareCode == "" {
+		return nil, "", fmt.Errorf("no stored credentials for hub at %s (bsid %s) and no share code provided; add a share code in the configuration to register", host, info.BaseStation)
+	}
+	if password == "" {
+		return nil, "", fmt.Errorf("no stored credentials for hub at %s (bsid %s) and no password provided; add your account password in the configuration to register", host, info.BaseStation)
+	}
+
+	creds, err := ddapi.Register(shareCode, password, "API")
+	if err != nil {
+		return nil, "", fmt.Errorf("register hub at %s: %w", host, err)
+	}
+
+	// Guard against a share code that belongs to a different hub than the one at host.
+	// The credentials file is keyed by the local hub's bsid, so saving mismatched
+	// credentials would both fail to connect and (because the file then exists) cause
+	// later starts to skip registration even after the config is corrected.
+	if creds.Credential.BaseStation != info.BaseStation {
+		return nil, "", fmt.Errorf("share code is for a different hub (registered bsid %s) than the hub at %s (bsid %s); check that each hub's share code matches its host", creds.Credential.BaseStation, host, info.BaseStation)
+	}
+
+	if err := SaveCreds(path, creds); err != nil {
+		return nil, "", fmt.Errorf("save credentials %s: %w", path, err)
+	}
+
+	logrus.WithFields(logrus.Fields{"path": path, "bsid": info.BaseStation}).Info("Registered new hub credentials")
+	return creds, path, nil
 }

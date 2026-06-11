@@ -419,17 +419,31 @@ func (dc *Conn) internalMessages() error {
 	return nil
 }
 
-// Messages gets any pending status messages from the server.
-func (dc *Conn) Messages() ([]*Message, error) {
-	if len(dc.pendingMessages) == 0 {
-		if err := dc.internalMessages(); err != nil {
-			return nil, err
-		}
-	}
-
+// takePending atomically returns and clears the queued pending messages.
+//
+// pendingMessages is appended to from genericRequest/internalMessages while
+// genericRequestMutex is held, so all reads and clears go through this single locked
+// accessor to avoid racing with a concurrent request (e.g. the status poller running
+// alongside the message loop on the same Conn).
+func (dc *Conn) takePending() []*Message {
+	dc.genericRequestMutex.Lock()
+	defer dc.genericRequestMutex.Unlock()
 	out := dc.pendingMessages
 	dc.pendingMessages = nil
-	return out, nil
+	return out
+}
+
+// Messages gets any pending status messages from the server.
+func (dc *Conn) Messages() ([]*Message, error) {
+	if out := dc.takePending(); len(out) > 0 {
+		return out, nil
+	}
+	// Nothing queued; fetch a fresh batch (internalMessages acquires the mutex itself)
+	// and then drain whatever it enqueued.
+	if err := dc.internalMessages(); err != nil {
+		return nil, err
+	}
+	return dc.takePending(), nil
 }
 
 // Request makes a signed generic RPC and waits until its response is available.
