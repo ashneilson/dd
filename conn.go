@@ -420,15 +420,27 @@ func (dc *Conn) internalMessages() error {
 }
 
 // Messages gets any pending status messages from the server.
+//
+// pendingMessages is appended to from genericRequest/internalMessages while
+// genericRequestMutex is held, so we read and clear it under the same mutex here to
+// avoid racing with a concurrent request (e.g. the status poller running alongside the
+// message loop on the same Conn). The mutex is released before calling internalMessages,
+// which acquires it itself.
 func (dc *Conn) Messages() ([]*Message, error) {
-	if len(dc.pendingMessages) == 0 {
+	dc.genericRequestMutex.Lock()
+	empty := len(dc.pendingMessages) == 0
+	dc.genericRequestMutex.Unlock()
+
+	if empty {
 		if err := dc.internalMessages(); err != nil {
 			return nil, err
 		}
 	}
 
+	dc.genericRequestMutex.Lock()
 	out := dc.pendingMessages
 	dc.pendingMessages = nil
+	dc.genericRequestMutex.Unlock()
 	return out, nil
 }
 

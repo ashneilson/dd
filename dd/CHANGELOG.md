@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Registration now verifies the share code belongs to the hub at the configured host (matching base station IDs) before saving credentials, so a mismatched share code fails clearly instead of persisting bad credentials that would be reused on later starts.
 - `mqtt_prefix` values are rejected if they contain `/`, `+`, or `#`, which would otherwise misroute commands or break MQTT subscriptions.
 - The run script now fails fast (without leaving a partial file) if the `hubs` configuration cannot be parsed as JSON.
+- First-time registration now requires a password as well as a share code, failing locally with a clear message instead of attempting to register with an empty password.
+- A device whose ID is already owned by another hub is now refused with a loud error instead of silently driving the wrong hub's connection. Device registration is atomic, so two hubs starting at once cannot overwrite each other. (Assumes SmartDoor device IDs are unique across your hubs; if they collide, the conflicting door is reported and left uncontrolled rather than corrupted.)
+- Fixed a data race on `Conn.pendingMessages` between the status poller and the message loop sharing one connection; reads/clears now use the same lock as the appends.
 
 ## [0.3.3] - 2025-12-02
 

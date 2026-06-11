@@ -170,9 +170,12 @@ func EnsureHubCredentials(dir, host, shareCode, password string) (*ddapi.Registe
 		return nil, "", fmt.Errorf("stat credentials %s: %w", path, statErr)
 	}
 
-	// No credentials yet: a share code is required to register this hub.
+	// No credentials yet: a share code and password are required to register this hub.
 	if shareCode == "" {
 		return nil, "", fmt.Errorf("no stored credentials for hub at %s (bsid %s) and no share code provided; add a share code in the configuration to register", host, info.BaseStation)
+	}
+	if password == "" {
+		return nil, "", fmt.Errorf("no stored credentials for hub at %s (bsid %s) and no password provided; add your account password in the configuration to register", host, info.BaseStation)
 	}
 
 	creds, err := ddapi.Register(shareCode, password, "API")

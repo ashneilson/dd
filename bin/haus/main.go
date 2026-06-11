@@ -341,8 +341,23 @@ func processDevice(rt *hubRuntime, mqttHandler *ddapi.MQTTHandler, device ddapi.
 
 	// Ensure thread-safe access to DeviceFSMs using helper functions
 	deviceFSM, exists := ddapi.GetDeviceFSM(device.ID)
+	if exists && deviceFSM.HubID != rt.basicInfo.BaseStation {
+		// Another hub already owns this device ID. Refuse to touch it rather than
+		// driving the wrong hub's connection. (Chosen behaviour: fail loudly instead
+		// of composite-keying device identity.)
+		logger.WithFields(logrus.Fields{
+			"deviceID": device.ID,
+			"thisHub":  rt.basicInfo.BaseStation,
+			"ownerHub": deviceFSM.HubID,
+		}).Error("Device ID conflicts with another hub; skipping. Give each hub devices with unique IDs, or the conflicting door cannot be controlled.")
+		return
+	}
 	if !exists {
 		deviceFSM = ddapi.ConfigureDevice(mqttHandler, rt.conn, prefix, device, rt.basicInfo)
+		if deviceFSM == nil {
+			// Conflict (already owned by another hub) — ConfigureDevice logged the reason.
+			return
+		}
 		// Subscriptions are handled in the MQTT OnConnect handler
 		logger.Info("Waiting on status updates...")
 		if err := deviceFSM.Trigger(context.Background(), "go_online"); err != nil {
