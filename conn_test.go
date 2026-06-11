@@ -9,46 +9,54 @@ import (
 // pendingMessages (as Conn.Messages does, via takePending) alongside producers that
 // append under genericRequestMutex (as genericRequest/internalMessages do). Run with
 // `go test -race` to catch a regression that drops the locking discipline.
+//
+// Producers append a fixed total; a drainer removes messages concurrently and sweeps
+// once more after all producers finish. Every appended message must be drained exactly
+// once, so the count is deterministic regardless of goroutine scheduling.
 func TestConn_PendingMessagesConcurrentAccess(t *testing.T) {
 	dc := &Conn{}
 
 	const producers = 4
-	const iterations = 20000
+	const perProducer = 5000
+	const total = producers * perProducer
 
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
-
-	// Producers mimic the append-under-lock done by genericRequest/internalMessages.
+	var prodWg sync.WaitGroup
 	for i := 0; i < producers; i++ {
-		wg.Add(1)
+		prodWg.Add(1)
 		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-					dc.genericRequestMutex.Lock()
-					dc.pendingMessages = append(dc.pendingMessages, &Message{})
-					dc.genericRequestMutex.Unlock()
-				}
+			defer prodWg.Done()
+			for j := 0; j < perProducer; j++ {
+				dc.genericRequestMutex.Lock()
+				dc.pendingMessages = append(dc.pendingMessages, &Message{})
+				dc.genericRequestMutex.Unlock()
 			}
 		}()
 	}
 
-	// Consumer drains via the same accessor Messages() uses.
-	var drained int
-	for i := 0; i < iterations; i++ {
-		drained += len(dc.takePending())
-	}
+	// Drainer removes messages via the same accessor Messages() uses, until signalled
+	// that producers are done, then does a final sweep and reports the running total.
+	stop := make(chan struct{})
+	drainedCh := make(chan int, 1)
+	go func() {
+		count := 0
+		for {
+			count += len(dc.takePending())
+			select {
+			case <-stop:
+				count += len(dc.takePending()) // final sweep after producers finished
+				drainedCh <- count
+				return
+			default:
+			}
+		}
+	}()
+
+	prodWg.Wait()
 	close(stop)
-	wg.Wait()
+	drained := <-drainedCh
 
-	// Drain anything the producers appended after the loop finished.
-	drained += len(dc.takePending())
-
-	if drained == 0 {
-		t.Error("expected to drain at least one pending message across concurrent producers")
+	if drained != total {
+		t.Errorf("drained %d messages, want %d", drained, total)
 	}
 }
 
