@@ -1,5 +1,5 @@
 name: SmartDoor MQTT Bridge
-slug: dd
+slug: dd-multi
 version: "0.4.0"
 image: "ghcr.io/ashneilson/{arch}-addon-dd"
 description: SmartDoor garage door integration with MQTT and position control, supporting multiple hubs
