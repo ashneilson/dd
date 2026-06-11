@@ -15,29 +15,32 @@ else
 fi
 POLL_INTERVAL_FLAG="-pollInterval ${POLL_INTERVAL}s"
 
-# Build the hub configuration file consumed by the haus binary. The 'hubs' option is a
-# list of objects whose keys (name, host, code, password, mqtt_prefix) match the JSON the
-# haus binary expects, so we can pass it through with minimal reshaping.
+# Build the hub configuration file consumed by the haus binary. Read the 'hubs' list
+# directly from the add-on options file: its objects' keys (name, host, code, password,
+# mqtt_prefix) already match the JSON the haus binary expects. Reading the file directly
+# with jq avoids ambiguity in how bashio::config returns complex (list) values.
 HUBS_FILE="/tmp/dd-hubs.json"
-HUBS_JSON="$(bashio::config 'hubs')"
-# Require a non-empty JSON array. This rejects an unset value, null, an empty list ([]),
-# a non-array value, and unparseable JSON in one check, failing fast with a clear message
-# instead of letting haus fail later with a less actionable error.
-if ! printf '%s' "${HUBS_JSON}" | jq -e 'type == "array" and length > 0' > /dev/null 2>&1; then
+OPTIONS_FILE="/data/options.json"
+
+HUB_COUNT="$(jq '(.hubs // []) | length' "${OPTIONS_FILE}" 2>/dev/null || echo 0)"
+if [ -z "${HUB_COUNT}" ] || [ "${HUB_COUNT}" -eq 0 ]; then
     bashio::log.fatal "No hubs configured. Add at least one hub (host, mqtt_prefix and, for first-time registration, a share code and password) in the add-on configuration."
+    # Diagnostic (no secrets): show which option keys the supervisor actually saved.
+    bashio::log.info "Option keys present: $(jq -rc 'keys' "${OPTIONS_FILE}" 2>/dev/null)"
     exit 1
 fi
 
-# Wrap the hubs array as {"hubs": [...]} for the haus binary. The file may contain hub
-# share codes and passwords, so create it readable only by the add-on (umask 077 -> 0600)
-# and fail fast (without leaving a half-written file) if jq cannot write it.
-if ! ( umask 077 && printf '%s' "${HUBS_JSON}" | jq '{hubs: .}' > "${HUBS_FILE}" ); then
+# Wrap as {"hubs": [...]} for the haus binary. The file may contain hub share codes and
+# passwords, so create it readable only by the add-on (umask 077 -> 0600) and fail fast
+# (without leaving a half-written file) if jq cannot write it.
+if ! ( umask 077 && jq '{hubs: (.hubs // [])}' "${OPTIONS_FILE}" > "${HUBS_FILE}" ); then
     rm -f "${HUBS_FILE}"
     bashio::log.fatal "Could not write the hub configuration file."
     exit 1
 fi
-HUB_COUNT="$(printf '%s' "${HUBS_JSON}" | jq 'length')"
-bashio::log.info "Configured ${HUB_COUNT} hub(s)."
+
+HUB_PREFIXES="$(jq -r '[(.hubs // [])[].mqtt_prefix] | join(", ")' "${OPTIONS_FILE}")"
+bashio::log.info "Configured ${HUB_COUNT} hub(s): ${HUB_PREFIXES}"
 
 # Check if user provided custom MQTT settings or use HA MQTT service
 if bashio::config.exists 'mqtt.broker'; then
