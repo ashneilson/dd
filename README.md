@@ -2,7 +2,7 @@
 
 This project provides a Home Assistant add-on for integrating SmartDoor smart garage door systems with Home Assistant via MQTT.
 
-**Repository:** https://github.com/gravypower/dd
+**Repository:** https://github.com/ashneilson/dd
 
 ## Architecture Overview
 
@@ -40,20 +40,20 @@ The project consists of three main executables:
 
 ### Package Structure
 
-- **Root Package** (`github.com/gravypower/dd`)
+- **Root Package** (`github.com/ashneilson/dd`)
   - `conn.go` - Device connection & encrypted communication
   - `crypto.go` - AES-CBC encryption/decryption, HMAC signing
   - `types.go` - Core data structures (Conn, Credential, Message, RPC)
   - `cert.go` - Embedded SSL certificates for SmartDoor CA
 
-- **API Package** (`github.com/gravypower/dd/api`)
+- **API Package** (`github.com/ashneilson/dd/api`)
   - `haus.go` - MQTT integration & finite state machine logic
   - `devices.go` - Device status structures and fetching
   - `command.go` - Command execution wrapper
   - `availableCommands.go` - Complete command mapping (40+ commands)
   - `info.go` - Basic device information retrieval
 
-- **Helper Package** (`github.com/gravypower/dd/helper`)
+- **Helper Package** (`github.com/ashneilson/dd/helper`)
   - `creds.go` - Credential loading from JSON files
   - `messages.go` - Background message polling loop
 

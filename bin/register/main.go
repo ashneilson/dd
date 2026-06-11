@@ -4,8 +4,8 @@ import (
 	"flag"
 	"log"
 
-	ddapi "github.com/gravypower/dd/api"
-	"github.com/gravypower/dd/helper"
+	ddapi "github.com/ashneilson/dd/api"
+	"github.com/ashneilson/dd/helper"
 )
 
 var (

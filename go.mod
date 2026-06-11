@@ -1,4 +1,4 @@
-module github.com/gravypower/dd
+module github.com/ashneilson/dd
 
 go 1.23.0
 

@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/gravypower/dd"
+	"github.com/ashneilson/dd"
 )
 
 // Door command constants - these map to SmartDoor device command codes

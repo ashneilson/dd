@@ -1,4 +1,4 @@
 # https://developers.home-assistant.io/docs/add-ons/repository#repository-configuration
-name: dd Repository
-url: 'https://github.com/gravypower/dd'
+name: dd-multi Repository
+url: 'https://github.com/ashneilson/dd'
 maintainer: Awesome Maintainer <awesome@example.com>

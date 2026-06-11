@@ -10,7 +10,7 @@ It supports **multiple hubs** — handy when you have more than one garage door,
 
 ### 1. Installation
 
-1. Add this repository URL to your Home Assistant Add-on Store: `https://github.com/gravypower/dd`
+1. Add this repository URL to your Home Assistant Add-on Store: `https://github.com/ashneilson/dd`
 2. Search for **SmartDoor MQTT Bridge** and click **Install**.
 
 ### 2. Configuration & One-Time Registration
