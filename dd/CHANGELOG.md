@@ -4,6 +4,11 @@ All notable changes to this add-on will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.4.1] - 2026-06-12
+
+### Fixed
+- Start-up failed with "No hubs configured" even when hubs were set in the UI. The run script now reads the `hubs` list directly from `/data/options.json` with `jq` instead of `bashio::config`, which does not reliably return complex list values. On a genuine empty config it now also logs which option keys are present (no secrets) to aid diagnosis.
+
 ## [0.4.0] - 2026-06-11
 
 ### Added
