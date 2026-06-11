@@ -48,7 +48,7 @@ Each entry in the **hubs** list accepts:
 | :--- | :--- | :--- |
 | **name** | `string` | Friendly name for the hub; used as the Home Assistant device name. |
 | **host** | `string` | The local IP address of this SmartDoor hardware unit. |
-| **mqtt_prefix** | `string` | Unique topic prefix used for Home Assistant discovery and status for this hub. |
+| **mqtt_prefix** | `string` | Unique topic prefix used for Home Assistant discovery and status for this hub. Must not contain `/`, `+`, or `#`. |
 | **code** | `string` | One-time share code from your mobile app for this hub (only needed for first registration). |
 | **password** | `password` | Your account password (only needed for first registration). |
 

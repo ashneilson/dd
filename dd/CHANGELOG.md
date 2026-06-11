@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - Eliminated a latent race where the periodic status poller could send on a closed channel after the message loop ended; hub shutdown is now driven by context cancellation, and one hub losing its connection no longer affects the others.
+- Registration now verifies the share code belongs to the hub at the configured host (matching base station IDs) before saving credentials, so a mismatched share code fails clearly instead of persisting bad credentials that would be reused on later starts.
+- `mqtt_prefix` values are rejected if they contain `/`, `+`, or `#`, which would otherwise misroute commands or break MQTT subscriptions.
+- The run script now fails fast (without leaving a partial file) if the `hubs` configuration cannot be parsed as JSON.
 
 ## [0.3.3] - 2025-12-02
 

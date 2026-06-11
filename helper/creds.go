@@ -179,6 +179,15 @@ func EnsureHubCredentials(dir, host, shareCode, password string) (*ddapi.Registe
 	if err != nil {
 		return nil, "", fmt.Errorf("register hub at %s: %w", host, err)
 	}
+
+	// Guard against a share code that belongs to a different hub than the one at host.
+	// The credentials file is keyed by the local hub's bsid, so saving mismatched
+	// credentials would both fail to connect and (because the file then exists) cause
+	// later starts to skip registration even after the config is corrected.
+	if creds.Credential.BaseStation != info.BaseStation {
+		return nil, "", fmt.Errorf("share code is for a different hub (registered bsid %s) than the hub at %s (bsid %s); check that each hub's share code matches its host", creds.Credential.BaseStation, host, info.BaseStation)
+	}
+
 	if err := SaveCreds(path, creds); err != nil {
 		return nil, "", fmt.Errorf("save credentials %s: %w", path, err)
 	}

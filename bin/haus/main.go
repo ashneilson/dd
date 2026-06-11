@@ -235,6 +235,12 @@ func loadHubConfigs() ([]hubConfig, error) {
 			if h.MQTTPrefix == "" {
 				return nil, fmt.Errorf("hub %q (%s) is missing mqtt_prefix", h.Name, h.Host)
 			}
+			// The prefix forms the first level of each device's topic (prefix/<id>/...),
+			// and command routing assumes the device ID is the second segment. A '/' would
+			// shift that, and the MQTT wildcards '+'/'#' would break subscriptions.
+			if strings.ContainsAny(h.MQTTPrefix, "/+#") {
+				return nil, fmt.Errorf("invalid mqtt_prefix %q for hub %q: must not contain '/', '+' or '#'", h.MQTTPrefix, h.Name)
+			}
 			if seenPrefix[h.MQTTPrefix] {
 				return nil, fmt.Errorf("duplicate mqtt_prefix %q; each hub must use a unique prefix", h.MQTTPrefix)
 			}

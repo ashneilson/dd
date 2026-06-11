@@ -24,8 +24,14 @@ if [ -z "${HUBS_JSON}" ] || [ "${HUBS_JSON}" = "null" ]; then
     bashio::log.fatal "No hubs configured. Add at least one hub (host, mqtt_prefix and, for first-time registration, a share code) in the add-on configuration."
     exit 1
 fi
-echo "${HUBS_JSON}" | jq '{hubs: .}' > "${HUBS_FILE}"
-HUB_COUNT="$(echo "${HUBS_JSON}" | jq 'length')"
+# Wrap the hubs array as {"hubs": [...]} for the haus binary. Fail fast (and do not leave
+# a half-written file) if the value cannot be parsed as JSON.
+if ! printf '%s' "${HUBS_JSON}" | jq '{hubs: .}' > "${HUBS_FILE}"; then
+    rm -f "${HUBS_FILE}"
+    bashio::log.fatal "Could not parse the 'hubs' configuration as JSON. Check the add-on configuration."
+    exit 1
+fi
+HUB_COUNT="$(printf '%s' "${HUBS_JSON}" | jq 'length')"
 bashio::log.info "Configured ${HUB_COUNT} hub(s)."
 
 # Check if user provided custom MQTT settings or use HA MQTT service
