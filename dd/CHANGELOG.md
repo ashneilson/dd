@@ -4,6 +4,12 @@ All notable changes to this add-on will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.4.2] - 2026-06-12
+
+### Changed
+- **State and position MQTT messages are now retained**, so an MQTT broker or Home Assistant restart immediately restores each door's last known state/position instead of leaving the cover "unknown".
+- **The logical state is now (re)published on every poll**, derived from the door's actual position, not just on FSM transitions. This keeps Home Assistant in sync and self-heals the case where a cover becomes available but missed the original state message (and so stayed "unknown").
+
 ## [0.4.1] - 2026-06-12
 
 ### Fixed

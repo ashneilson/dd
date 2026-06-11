@@ -171,10 +171,12 @@ func (h *MQTTHandler) publishToMQTT(topic string, qos byte, retained bool, paylo
 	return nil
 }
 
-// PublishStatus publishes a device's status to the appropriate topic
+// PublishStatus publishes a device's status to the appropriate topic.
+// Retained so a reconnecting MQTT client (or Home Assistant restart) immediately sees the
+// last known state instead of leaving the cover in an "unknown" state.
 func (h *MQTTHandler) PublishStatus(prefix, deviceID, status string) error {
 	topic := fmt.Sprintf(StateTopicTemplate, prefix, deviceID)
-	return h.publishToMQTT(topic, 0, false, status)
+	return h.publishToMQTT(topic, 0, true, status)
 }
 
 // PublishAvailability publishes a device's availability to the appropriate topic
@@ -183,10 +185,33 @@ func (h *MQTTHandler) PublishAvailability(prefix, deviceID, availability string)
 	return h.publishToMQTT(topic, 0, true, availability)
 }
 
-// PublishPosition publishes a device's current position (0-100) to the appropriate topic
+// PublishPosition publishes a device's current position (0-100) to the appropriate topic.
+// Retained so the last known position survives an MQTT client/Home Assistant restart.
 func (h *MQTTHandler) PublishPosition(prefix, deviceID string, position int) error {
 	topic := fmt.Sprintf(PositionTopicTemplate, prefix, deviceID)
-	return h.publishToMQTT(topic, 0, false, fmt.Sprintf("%d", position))
+	return h.publishToMQTT(topic, 0, true, fmt.Sprintf("%d", position))
+}
+
+// CoverStateForPublish returns the Home Assistant cover state to publish for a device,
+// given its current FSM state and physical position. It is used to keep the state topic
+// in sync on every poll (self-healing), not just on FSM transitions.
+//
+// Full positions are treated as ground truth (closed at 0, open at 100). At an
+// intermediate position an in-progress motion state (opening/closing/stopping) is
+// preserved; otherwise a partially-open door is reported as "open".
+func CoverStateForPublish(fsmState string, position int) string {
+	if position <= PositionClosed {
+		return "closed"
+	}
+	if position >= PositionOpen {
+		return "open"
+	}
+	switch fsmState {
+	case "opening", "closing", "stopping":
+		return fsmState
+	default:
+		return "open"
+	}
 }
 
 // RemoveEntity removes the Home Assistant entity for the device
