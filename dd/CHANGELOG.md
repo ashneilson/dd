@@ -4,6 +4,11 @@ All notable changes to this add-on will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.4.3] - 2026-06-13
+
+### Fixed
+- Add-on failed to start when using the Home Assistant MQTT service — first crashing with `bashio::services.wait_for: command not found` (exit 127, that function does not exist), and, after an HA OS upgrade, with a persistent `Service not enabled` from bashio's MQTT discovery even though a broker was configured. The run script no longer uses `bashio::services.*`; it now fetches MQTT connection details directly from the Supervisor API (`GET /services/mqtt`) with a short retry — a known-more-robust approach that avoids the bashio discovery bug — and, if MQTT genuinely can't be found, logs the Supervisor's actual response and exits with clear guidance (start an MQTT broker add-on, or set a custom MQTT broker in the config).
+
 ## [0.4.2] - 2026-06-12
 
 ### Changed
