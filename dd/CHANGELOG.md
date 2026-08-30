@@ -4,6 +4,11 @@ All notable changes to this add-on will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.4.3] - 2026-06-13
+
+### Fixed
+- Add-on crashed on start with `bashio::services.wait_for: command not found` (exit 127) when the Home Assistant MQTT service was briefly unavailable at boot — exposed after an HA OS upgrade. `bashio::services.wait_for` is not a real bashio function; the run script now polls `bashio::services.available` for up to ~60s and exits with a clear, actionable message if MQTT never becomes available (instead of crashing on the missing function).
+
 ## [0.4.2] - 2026-06-12
 
 ### Changed

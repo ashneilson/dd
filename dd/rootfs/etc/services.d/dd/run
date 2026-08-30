@@ -52,12 +52,27 @@ if bashio::config.exists 'mqtt.broker'; then
 else
     bashio::log.info "Using Home Assistant MQTT service."
 
-    # Wait for MQTT service to become available
+    # Wait (bounded) for the MQTT service to be published by the Supervisor. bashio has no
+    # built-in wait helper (bashio::services.wait_for does not exist and crashes the run
+    # script), so poll bashio::services.available instead. This also tolerates the brief
+    # "service not enabled" window some Supervisor / HA OS versions show at boot.
     if ! bashio::services.available 'mqtt'; then
-        bashio::log.warning "Home Assistant MQTT service not available; waiting..."
-        bashio::services.wait_for 'mqtt'
-        bashio::log.info "MQTT service is now available."
+        bashio::log.warning "Home Assistant MQTT service not available yet; waiting..."
+        tries=0
+        while [ "${tries}" -lt 30 ]; do
+            sleep 2
+            if bashio::services.available 'mqtt' > /dev/null 2>&1; then
+                break
+            fi
+            tries=$((tries + 1))
+        done
     fi
+
+    if ! bashio::services.available 'mqtt'; then
+        bashio::log.fatal "Home Assistant MQTT service is still not available after waiting. Ensure an MQTT broker add-on (e.g. Mosquitto) is installed and started, or set a custom MQTT broker (mqtt.broker/port/username/password) in this add-on's configuration."
+        exit 1
+    fi
+    bashio::log.info "MQTT service is now available."
 
     MQTT_HOST=$(bashio::services 'mqtt' 'host')
     MQTT_PORT=$(bashio::services 'mqtt' 'port')
